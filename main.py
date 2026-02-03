@@ -24,8 +24,27 @@ BLACK = (0, 0, 0)
 RED = (0, 0, 255)
 
 # Initialize MediaPipe
-mp_drawing = mp.solutions.drawing_utils
-mp_hands = mp.solutions.hands
+try:
+    import mediapipe as mp
+    
+    # Create hand landmarker
+    base_options = mp.tasks.BaseOptions(model_asset_path='hand_landmarker.task')
+    options = mp.tasks.vision.HandLandmarkerOptions(
+        base_options=base_options,
+        running_mode=mp.tasks.vision.RunningMode.VIDEO,
+        num_hands=2,
+        min_hand_detection_confidence=0.8,
+        min_hand_presence_confidence=0.5,
+        min_tracking_confidence=0.5
+    )
+    hand_landmarker = mp.tasks.vision.HandLandmarker.create_from_options(options)
+    
+    print("✅ Using MediaPipe v0.10+ tasks API")
+    
+except Exception as e:
+    print(f"❌ Error: MediaPipe initialization failed: {e}")
+    print("🔧 Make sure hand_landmarker.task model file is present")
+    sys.exit(1)
 
 # Game variables
 score = 0
@@ -36,9 +55,9 @@ target_size = 30
 particles = []
 game_state = "MENU"  # MENU, PLAYING, GAME_OVER
 
-# Target position
-x_target = random.randint(100, 540)
-y_target = random.randint(100, 380)
+# Target position - will be set properly when game starts
+x_target = 640  # Center initially
+y_target = 360  # Center initially
 
 # High scores file
 SCORES_FILE = "high_scores.json"
@@ -207,17 +226,20 @@ def draw_game_over(image):
     cv2.putText(image, "Press R to restart or Q to quit", (width//2 - 150, height - 50), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, WHITE, 2)
 
-def spawn_new_target():
+def spawn_new_target(screen_width=1280, screen_height=720):
     global x_target, y_target
-    x_target = random.randint(100, 540)
-    y_target = random.randint(100, 380)
+    # Use a margin to keep targets away from edges
+    margin = 80
+    
+    x_target = random.randint(margin, screen_width - margin)
+    y_target = random.randint(margin, screen_height - margin)
 
 def reset_game():
     global score, game_start_time, particles
     score = 0
     game_start_time = time.time()
     particles = []
-    spawn_new_target()
+    spawn_new_target()  # Will use default dimensions initially
 
 print("� VISION TAP GAME STARTING...")
 print("� Initializing camera...")
@@ -235,9 +257,12 @@ print("✅ Camera initialized successfully!")
 video.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 video.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
-with mp_hands.Hands(
-        min_detection_confidence=0.8,
-        min_tracking_confidence=0.5) as hands:
+# Create window and set to fullscreen immediately
+cv2.namedWindow('🎮 Vision Tap - Hand Tracking Game', cv2.WINDOW_NORMAL)
+cv2.setWindowProperty('🎮 Vision Tap - Hand Tracking Game', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+with hand_landmarker:
+    frame_timestamp_ms = 0
 
     while video.isOpened():
         ret, frame = video.read()
@@ -246,10 +271,16 @@ with mp_hands.Hands(
             print("❌ Error: Could not read from camera")
             break
 
-        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        image = cv2.flip(image, 1)
-        imageHeight, imageWidth, _ = image.shape
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        # Flip and convert frame
+        frame = cv2.flip(frame, 1)
+        imageHeight, imageWidth, _ = frame.shape
+        
+        # Convert to RGB for MediaPipe
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        
+        # Use BGR frame for display
+        image = frame.copy()
 
         if game_state == "MENU":
             draw_menu(image)
@@ -264,7 +295,8 @@ with mp_hands.Hands(
                 game_state = "GAME_OVER"
             else:
                 # Process hand tracking
-                results = hands.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+                frame_timestamp_ms += 33  # Approximate 30 FPS
+                results = hand_landmarker.detect_for_video(mp_image, frame_timestamp_ms)
                 
                 # Draw target
                 draw_target(image)
@@ -275,42 +307,34 @@ with mp_hands.Hands(
                     particle.draw(image)
                 
                 # Hand tracking
-                if results.multi_hand_landmarks:
-                    for hand_landmarks in results.multi_hand_landmarks:
-                        mp_drawing.draw_landmarks(
-                            image, hand_landmarks, mp_hands.HAND_CONNECTIONS,
-                            mp_drawing.DrawingSpec(color=NEON_PINK, thickness=2, circle_radius=2),
-                            mp_drawing.DrawingSpec(color=NEON_BLUE, thickness=2)
-                        )
+                if results.hand_landmarks:
+                    for hand_landmarks in results.hand_landmarks:
+                        # Draw hand landmarks
+                        for landmark in hand_landmarks:
+                            x = int(landmark.x * imageWidth)
+                            y = int(landmark.y * imageHeight)
+                            cv2.circle(image, (x, y), 3, NEON_PINK, -1)
                         
-                        # Check finger tip
-                        for point in mp_hands.HandLandmark:
-                            if str(point) == 'HandLandmark.INDEX_FINGER_TIP':
-                                landmark = hand_landmarks.landmark[point]
-                                pixel_coords = mp_drawing._normalized_to_pixel_coordinates(
-                                    landmark.x, landmark.y, imageWidth, imageHeight
-                                )
-                                
-                                if pixel_coords:
-                                    finger_x, finger_y = pixel_coords
-                                    draw_glowing_circle(image, (finger_x, finger_y), 15, NEON_YELLOW)
-                                    
-                                    # Check collision
-                                    distance = math.sqrt((finger_x - x_target)**2 + (finger_y - y_target)**2)
-                                    if distance < target_size + 15:
-                                        score += 1
-                                        create_explosion(x_target, y_target)
-                                        spawn_new_target()
-                                        print(f"🎯 HIT! Score: {score}")
+                        # Check index finger tip (landmark 8)
+                        if len(hand_landmarks) > 8:
+                            finger_landmark = hand_landmarks[8]  # INDEX_FINGER_TIP
+                            finger_x = int(finger_landmark.x * imageWidth)
+                            finger_y = int(finger_landmark.y * imageHeight)
+                            
+                            draw_glowing_circle(image, (finger_x, finger_y), 15, NEON_YELLOW)
+                            
+                            # Check collision
+                            distance = math.sqrt((finger_x - x_target)**2 + (finger_y - y_target)**2)
+                            if distance < target_size + 15:
+                                score += 1
+                                create_explosion(x_target, y_target)
+                                spawn_new_target(imageWidth, imageHeight)
+                                print(f"🎯 HIT! Score: {score}")
         
         elif game_state == "GAME_OVER":
             draw_game_over(image)
 
         cv2.imshow('🎮 Vision Tap - Hand Tracking Game', image)
-        
-        # Make window fullscreen
-        cv2.namedWindow('🎮 Vision Tap - Hand Tracking Game', cv2.WINDOW_NORMAL)
-        cv2.setWindowProperty('🎮 Vision Tap - Hand Tracking Game', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
         # Handle input
         key = cv2.waitKey(1) & 0xFF
@@ -321,6 +345,8 @@ with mp_hands.Hands(
             if key == ord(' ') and player_name.strip():
                 game_state = "PLAYING"
                 reset_game()
+                # Set first target with proper screen dimensions
+                spawn_new_target(imageWidth, imageHeight)
             elif key == 8:  # Backspace
                 player_name = player_name[:-1]
             elif 32 <= key <= 126:  # Printable characters
