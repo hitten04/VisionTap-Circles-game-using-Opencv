@@ -8,11 +8,15 @@ import math
 import json
 import os
 
-# Fix for importlib.metadata error
+# Suppress importlib.metadata warnings
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="mediapipe")
+
+# Simple import fix
 try:
     import importlib.metadata
 except ImportError:
-    import importlib_metadata
+    pass
 
 # Colors - Define before classes that use them
 NEON_GREEN = (57, 255, 20)
@@ -36,9 +40,9 @@ target_size = 30
 particles = []
 game_state = "MENU"  # MENU, PLAYING, GAME_OVER
 
-# Target position - Initialize with full screen range
-x_target = random.randint(50, 1230)
-y_target = random.randint(50, 670)
+# Target position - Will be set after screen detection
+x_target = 500  # Temporary initial position
+y_target = 300
 
 # High scores file
 SCORES_FILE = "high_scores.json"
@@ -208,10 +212,11 @@ def draw_game_over(image):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, WHITE, 2)
 
 def spawn_new_target():
-    global x_target, y_target
-    # Use full screen width and height for target spawning
-    x_target = random.randint(50, 1230)  # Almost full width (1280 - 50 margin)
-    y_target = random.randint(50, 670)   # Almost full height (720 - 50 margin)
+    global x_target, y_target, screen_width, screen_height
+    # Use actual screen dimensions with safe margins
+    margin = 80
+    x_target = random.randint(margin, max(screen_width - margin, margin + 50))
+    y_target = random.randint(margin, max(screen_height - margin, margin + 50))
 
 def reset_game():
     global score, game_start_time, particles
@@ -238,7 +243,29 @@ video.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
 print("🤖 Initializing MediaPipe...")
 
+# Create fullscreen window before the game loop
+window_name = '🎮 Vision Tap - Hand Tracking Game'
+cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+cv2.setWindowProperty(window_name, cv2.WND_PROP_ASPECT_RATIO, cv2.WINDOW_FREERATIO)
+
+# Get actual screen resolution
+import tkinter as tk
+root = tk.Tk()
+screen_width = root.winfo_screenwidth()
+screen_height = root.winfo_screenheight()
+root.destroy()
+
+print(f"🖥️  Screen Resolution: {screen_width}x{screen_height}")
+
+# Initialize target position with actual screen dimensions
+spawn_new_target()
+
 try:
+    # Suppress MediaPipe warnings
+    import os
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+    
     with mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=2,
@@ -260,7 +287,10 @@ try:
 
             image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image = cv2.flip(image, 1)
-            imageHeight, imageWidth, _ = image.shape
+            
+            # Resize camera image to fill entire screen
+            image = cv2.resize(image, (screen_width, screen_height))
+            imageHeight, imageWidth = screen_height, screen_width
 
             results = hands.process(image)
             image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
@@ -317,11 +347,7 @@ try:
             elif game_state == "GAME_OVER":
                 draw_game_over(image)
 
-            cv2.imshow('🎮 Vision Tap - Hand Tracking Game', image)
-            
-            # Make window fullscreen
-            cv2.namedWindow('🎮 Vision Tap - Hand Tracking Game', cv2.WINDOW_NORMAL)
-            cv2.setWindowProperty('🎮 Vision Tap - Hand Tracking Game', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            cv2.imshow(window_name, image)
 
             # Handle input
             key = cv2.waitKey(1) & 0xFF
