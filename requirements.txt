@@ -1,0 +1,33 @@
+# Vision Tap - Hand Tracking Game Requirements
+# Core Dependencies
+
+# Computer Vision and Image Processing
+opencv-python==4.8.1.78
+opencv-contrib-python==4.8.1.78
+
+# Machine Learning and Hand Tracking
+mediapipe==0.10.8
+
+# Numerical Computing
+numpy==1.24.3
+
+# GUI and Display (for screen resolution detection)
+tk==0.1.0
+
+# Standard Library Dependencies (usually included with Python)
+# json - Built-in
+# time - Built-in
+# random - Built-in
+# math - Built-in
+# sys - Built-in
+# os - Built-in
+# warnings - Built-in
+
+# Optional Dependencies for Enhanced Features
+# matplotlib>=3.5.0  # For advanced plotting (if needed)
+# pillow>=9.0.0      # For image manipulation (if needed)
+
+# Development Dependencies (uncomment if needed)
+# pytest>=7.0.0      # For testing
+# black>=22.0.0      # For code formatting
+# flake8>=4.0.0      # For linting
